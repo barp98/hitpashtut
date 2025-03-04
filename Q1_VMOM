@@ -1,0 +1,110 @@
+%% define parameters
+c=299792458;
+omega=2*pi*11e9;
+lambda=2*pi*c/(omega);
+gamma = 0.57721;
+etta = sqrt(1.1);
+%k0 = 2 * pi / lambda; % Free-space wavenumber
+%k = k0; % Wave number (rad/m)
+k1 = 2;  % Dielectric contrast cylinder 1
+k2 = 3;  % Dielectric contrast cylinder 2
+R = 5*lambda; 
+d = 3*R;  % Separation distance
+theta_inc = pi / 3;  % Incident wave angle
+plotsize=5*d;
+k=omega/c;
+
+
+%% define grid
+No = 200;
+delta = plotsize/No;
+x_grid = linspace(-plotsize/2, plotsize/2, No);
+z_grid = linspace(-plotsize/2, plotsize/2, No);
+x_prime = x_grid;
+z_prime = z_grid;
+[X, Z] = meshgrid(x_grid, z_grid);
+phi=linspace(0,2*pi,No); %for RCS
+r=4*(d+2*R)^2/lambda; %r>>2D^2/lambda
+RCS=zeros(1,No);
+
+%% define paramaterization
+base=zeros(length(z_grid));
+base(X.^2+Z.^2<R^2 | X.^2+(Z-d).^2<R^2)=1;
+len=sum(sum(base));
+
+pos_x=zeros(1,len);
+pos_z=zeros(1,len);
+
+idx=1;
+for n=1:No
+    for m=1:No
+        if(base(n,m)==1)
+            pos_x(idx)=X(n,m);
+            pos_z(idx)=Z(n,m);
+            idx=idx+1;
+        end
+    end
+end
+
+%% calculate matrices
+temp=@(p,q) -1j/4*besselh(0,2,k*sqrt(p.^2+q.^2));
+temp1=integral2(temp,-delta/2,delta/2,-delta/2,delta/2);
+Zmat=eye(len).*temp1;
+Omat=eye(len).*(k^2*etta^2-k^2);
+
+for n=1:len
+    for m=1:len
+        if(m == n)
+            Zmat(m, n) = temp1;
+        elseif(m~=n)
+            Zmat(m,n)=-1j/4*besselh(0,2,k*sqrt((pos_x(m)-pos_x(n))^2+(pos_z(m)-pos_z(n))^2))*delta^2;
+        end
+    end
+end
+
+b_vec=(exp(-1j*k*(pos_x*sin(theta_inc)+pos_z*cos(theta_inc)))).';
+a_vec=inv(eye(len)-Zmat*Omat)*b_vec;
+
+idx=1; %for beautiful print
+for n=1:No
+    for m=1:No
+        if(base(n,m)==1)
+            base(n,m)=a_vec(idx);
+            idx=idx+1;
+        end
+    end
+end
+
+%% calculating scattered field from a vector
+u=zeros(No);
+for n=1:No
+    for m=1:No
+            u(n,m)=-1j/4*besselh(0,2,k*sqrt((pos_x-x_grid(n)).^2+(pos_z-z_grid(m)).^2))*a_vec*(k^2*etta^2-k^2)*delta^2;
+    end
+    RCS(n)=abs(-1j/4*besselh(0,2,k*sqrt((pos_x-r*sin(phi(n))).^2+(pos_z-r*cos(phi(n))).^2))*a_vec*(k^2*etta^2-k^2)*delta^2)^2;
+end
+
+RCS=2*pi*r*RCS; %RCS final calculation
+
+u_inc=exp(-1j*k*(X*sin(theta_inc)+Z*cos(theta_inc)));
+u(isnan(u))=base(isnan(u))-u_inc(isnan(u)); %for beautiful print
+
+%% plotting
+figure
+
+subplot(1,2,1)
+pcolor(z_grid,x_grid,real(u));
+shading interp; 
+colorbar;
+pbaspect([1 1 1]);
+title("scattered field using VMOM, \phi_{inc}="+theta_inc*180/pi+char(176));
+subtitle("R = " + R/lambda + "\lambda" + ", \epsilon = " + etta^2);
+xlabel("z[m]");
+ylabel("x[m]");
+
+subplot(1,2,2)
+polarplot(phi+pi,RCS);
+ax=gca;
+ax.ThetaZeroLocation = 'left';
+title("RCS using VMOM, \phi_{inc}="+theta_inc*180/pi+char(176));
+subtitle("R = " + R/lambda + "\lambda" + ", \epsilon = " + etta^2);
