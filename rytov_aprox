@@ -1,0 +1,69 @@
+%% Define parameters
+c = 3e8;
+freq = 10e9; % Operating frequency (Hz)
+omega = 2 * pi * freq; % Angular frequency (rad/s)
+lambda = c / freq;  % Wavelength (normalized)
+epsilon_cyl = 1.01;
+k = omega / c; % Wave number (rad/m)
+k_cyl = k * sqrt(epsilon_cyl);  % Dielectric contrast cylinders
+R = 5 * lambda;
+d = 3 * R;  % Separation distance
+E0 = 1;
+phi_inc = 0.25*pi;  % Incident wave angle
+
+%% Define grid using ndgrid (so first index corresponds to x, second to z)
+x_grid = linspace(-1, 1, 170);
+z_grid = linspace(-1, 1, 170);
+dx = x_grid(2) - x_grid(1);
+dz = z_grid(2) - z_grid(1);
+[x_int, z_int] = meshgrid(x_grid, z_grid);  % integration grid
+
+%% Define object function
+O = zeros(size(x_int));
+inside_cylinder1 = (x_int.^2 + z_int.^2) <= R^2;
+inside_cylinder2 = (x_int.^2 + (z_int - d).^2) <= R^2;
+O(inside_cylinder1) = k_cyl^2 - k^2;
+O(inside_cylinder2) = k_cyl^2 - k^2;
+
+%% Define incident wave
+u_inc = exp(-1j * k * (x_int * cos(phi_inc) + z_int * sin(phi_inc)));
+
+%% Green's function (anonymous function)
+% Note: here we will vectorize the evaluation below.
+G2D = @(x, z, xp, zp) -(1i/4) * besselh(0, 2, k * sqrt((x - xp).^2 + (z - zp).^2));
+
+%% Compute scattered field using vectorized integration over the inner grid
+E_scattered = zeros(size(x_int));
+
+% Loop over observation points (still a double loop but with a fully vectorized inner sum)
+for ix = 1:length(x_grid)
+    for iz = 1:length(z_grid)
+        x_obs = x_grid(ix);
+        z_obs = z_grid(iz);
+        
+        % Compute distance from the observation point to all integration points
+        R = sqrt((x_obs - x_int).^2 + (z_obs - z_int).^2);
+        
+        % Create a mask to skip integration points where x_obs == xp OR z_obs == zp
+        mask = ~((x_obs == x_int) | (z_obs == z_int));
+        
+        % Evaluate Green's function on the whole integration grid
+        G = -(1i/4) * besselh(0, 2, k * R);
+        G(~mask) = 0;  % Skip the singular (or designated) points
+        
+        % Perform the integration by summing over the grid
+        E_scattered(ix, iz) = sum(G(:) .* O(:) .* u_inc(:)) * dx * dz;
+    end
+end
+
+rytov = u_inc .* exp(E_scattered ./ u_inc);
+
+%% Plot the real part of the scattered field
+figure;
+imagesc(z_grid, x_grid, real(rytov - u_inc)); % Note: x_grid is used for the vertical axis.
+colorbar;
+xlabel('z (m)');
+ylabel('x (m)');
+title('Real Part of E\_scattered');
+axis xy;
+colormap jet;
