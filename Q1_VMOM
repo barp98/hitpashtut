@@ -1,22 +1,20 @@
 %% Parameters
 c = 3e8;                  % Speed of light [m/s]
-freq = 11e9;              % Frequency [Hz]
+freq = 10e9;              % Frequency [Hz]
 omega = 2 * pi * freq;    % Angular frequency [rad/s]
 lambda = c / freq;        % Wavelength [m]
-epsilon_cyl = 1.9;       % Relative permittivity of the cylinder
+epsilon_cyl = 1.01;       % Relative permittivity of the cylinder
 
 % Wave numbers
 k = omega / c;           % Free-space wave number [1/m]
 k_cyl = k * sqrt(epsilon_cyl); % Wave number inside the cylinder
-
 % Incident wave properties
-phi_inc = pi/2;        % Incident wave angle [rad]
+phi_inc = pi;        % Incident wave angle [rad]
 E0 = 1;                  % Incident electric field amplitude
 
 % Cylinder and simulation parameters
-R = 5 * lambda;          % Cylinder radius [m]
+R = 3 * lambda;          % Cylinder radius [m]
 d = 3 * R;               % Distance between cylinder centers [m]
-plotsize = 5*d;
 %% Grid and Sampling Parameters
 N = 200;             % Number of samples on each axis
 Z = linspace(-2.5*d, 2.5*d + d - R, N); % z-coordinates
@@ -27,79 +25,77 @@ X = linspace(-2.5*d, 2.5*d + d - R, N); % x-coordinates
 dx = X(2) - X(1); % Grid step size in x-direction
 dz = Z(2) - Z(1); % Grid step size in z-direction
 
-%% RCS Calculation Parameters
-phi = linspace(0, 2*pi, N);  % Angular sampling for RCS
-r = 4 * (d + 2 * R)^2 / lambda; % Far-field distance (r >> 2D^2/lambda)
-RCS = zeros(1, N);   % Initialize RCS storage
-
-%% defining paramaterization
+%% Build Object Function
 O=zeros(length(Z));
 O_mask = (x.^2 + z.^2 < R^2) | (x.^2 + (z - d).^2 < R^2);  % Boolean mask for scatterers
 O_val = k_cyl^2 - k^2;
 O(O_mask) = O_val;  % Set the O values where scatterers exist
 len=nnz(O);
-pos_x=zeros(1,len);
-pos_z=zeros(1,len);
+x_grid=zeros(1,len);
+z_grid=zeros(1,len);
 
-idx=1;
-for n_=1:N
-    for m_=1:N
-        if(O(n_,m_)~=0)
-            pos_x(idx)=x(n_,m_);
-            pos_z(idx)=z(n_,m_);
-            idx=idx+1;
+%% Parameterization
+count_discratization=1;
+for n=1:N
+    for m=1:N
+        if(O(n,m)~=0)
+            x_grid(count_discratization)=x(n,m);
+            z_grid(count_discratization)=z(n,m);
+            count_discratization=count_discratization+1;
         end
     end
 end
 
-%% calculating Z and O matrixes
-diagonal_values = integral2(@(x,y) -1j/4*besselh(0,2,k*sqrt(x.^2+y.^2)),-dx/2,dx/2,-dz/2,dz/2);
-Omat = eye(len).*(k_cyl^2-k^2);
+%% Build O matrix
+diagonal_values = integral2(@(x,y) -1j/4*besselh(0,2,k*sqrt(x.^2+y.^2)),-dx/2,dx/2,-dz/2,dz/2); %The integral represents the self-term of the matrix elements
+Omat = eye(len).*(k_cyl^2-k^2);%Construct the O matrix with diagonal elements given by (k_cyl^2 - k^2)
 % Compute distances for off-diagonal elements
-[X1, X2] = meshgrid(pos_x, pos_x);
-[Z1, Z2] = meshgrid(pos_z, pos_z);
-distances = sqrt((X2 - X1).^2 + (Z2 - Z1).^2);
+[X1, X2] = meshgrid(x_grid, x_grid);
+[Z1, Z2] = meshgrid(z_grid, z_grid);
+distances = sqrt((X2 - X1).^2 + (Z2 - Z1).^2); % Compute pairwise distances between all points
 
-% Assign off-diagonal elements
+%% Build Z matrix
 Zmat = zeros(len, len);
-Zmat(~eye(len)) = -1j / 4 * besselh(0, 2, k * distances(~eye(len))) * dx * dz;
-Zmat(eye(len) == 1) = diagonal_values;
+Zmat(eye(len) == 1) = diagonal_values; %set diagonal elements = diagonal_values(calculated before);
+Zmat(~eye(len)) = -1j / 4 * besselh(0, 2, k * distances(~eye(len))) * dx * dz;  %set non-diagonal elements, using Hankel function;
 
-b_vec=(E0*exp(-1j*k*(pos_x*sin(phi_inc)+pos_z*cos(phi_inc)))).';
+% Solve the system of equations for a_vec : (I - Z * O) * a_vec = b_vec
+b_vec=(E0*exp(-1j*k*(x_grid*sin(phi_inc)+z_grid*cos(phi_inc)))).';% Compute the incident field vector for all points in the grid
 a_vec=(eye(len)-Zmat*Omat)\b_vec;
+
+%% RCS
+RCS = zeros(1, N);   % Initialize RCS storage
+phi = linspace(0, 2*pi, N);  % Angular sampling for RCS
+r = 10 * (d + 2 * R)^2 / lambda; % Far-field distance
 
 %% calculating scattered field from a vector
 u=zeros(N);
-for n_=1:N
-    parfor m_=1:N
-            u(n_,m_)=-1j/4*besselh(0,2,k*sqrt((pos_x-X(n_)).^2+(pos_z-Z(m_)).^2))*a_vec*(k_cyl^2-k^2)*dx*dz;
-            %u(x,z)
+for n=1:N
+    for m=1:N
+            u(n,m)=-1j/4*besselh(0,2,k*sqrt((x_grid-X(n)).^2+(z_grid-Z(m)).^2))*a_vec*(k_cyl^2-k^2)*dx*dz;
     end
-    RCS(n_)=abs(-1j/4*besselh(0,2,k*sqrt((pos_x-r*sin(phi(n_))).^2+(pos_z-r*cos(phi(n_))).^2))*a_vec*(k_cyl^2-k^2)*dx*dz)^2;
+    RCS(n)=abs(-1j/4*besselh(0,2,k*sqrt((x_grid-r*sin(phi(n))).^2+(z_grid-r*cos(phi(n))).^2))*a_vec*(k_cyl^2-k^2)*dx*dz)^2;
 end
 
-RCS=2*pi*r*RCS/(E0^2); %RCS final calculation
+RCS=2*pi*r*RCS/(E0^2); 
 
 u_inc=E0*exp(-1j*k*(x*sin(phi_inc)+z*cos(phi_inc)));
-%u(isnan(u))=O(isnan(u))-u_inc(isnan(u)); %for beautiful print
+base=zeros(length(Z));
+base(x.^2+z.^2<R^2 | x.^2+(z-d).^2<R^2)=1;
+u(isnan(u))=0; 
 
 
-%% plotting
+%% plotting scattered field
 figure
-
-subplot(1,2,1)
-pcolor(Z,X,real(u));
-shading interp; 
+imagesc(Z,X,real(u)); 
+colormap jet;
 colorbar;
-pbaspect([1 1 1]);
-title("scattered field using VMOM, \phi_{inc}="+phi_inc*180/pi+char(176));
-subtitle("R = " + R/lambda + "\lambda" + ", \epsilon = " + epsilon_cyl);
-xlabel("z[m]");
-ylabel("x[m]");
+title("scattered field - VMOM");
+xlabel("z(m)");
+ylabel("x(m)");
+figure
+%% plotting RCS
+polarplot(phi,RCS); 
+title("RCS - VMOM");
+colormap jet;
 
-subplot(1,2,2)
-polarplot(phi+pi,RCS);
-ax=gca;
-ax.ThetaZeroLocation = 'left';
-title("RCS using VMOM, \phi_{inc}="+phi_inc*180/pi+char(176));
-subtitle("R = " + R/lambda + "\lambda" + ", \epsilon = " + epsilon_cyl);
